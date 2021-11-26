@@ -2,6 +2,8 @@ homepage: "https://www.snowplowanalytics.com"
 documentation: "https://docs.snowplowanalytics.com/docs/forwarding-events-to-destinations/forwarding-events/google-tag-manager-server-side/iterable-tag-for-gtm-ss/"
 versions:
   # Latest version
+  - sha: 93ea13aae9ea2cb3fe2d88c160277325f2d1cdbc
+    changeNotes: Update Documentation Links (#2)
+  # Older versions
   - sha: 89a8188ac8cd751270f5e97c95ccac97e5fbb829
     changeNotes: Initial Version
-  # Older versions

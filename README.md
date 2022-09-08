@@ -24,7 +24,10 @@ This Tag reads event data from the "Common Event Data" specified in the [Google 
 
 ### Installing from the Google Tag Manager Gallery
 
-Coming Soon
+1. From the Templates tab in GTM Server Side, click "Search Gallery" in the Tag Templates section
+2. Search for "Iterable" and select the official "By Snowplow" tag
+3. Click Add to Workspace
+4. Accept the permissions dialog by clicking "Add"
 
 ### Manual Installation
 

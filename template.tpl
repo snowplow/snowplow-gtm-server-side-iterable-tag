@@ -176,7 +176,7 @@ ___TEMPLATE_PARAMETERS___
                 ],
                 "enablingConditions": [
                   {
-                    "paramName": "useCommonClientId",
+                    "paramName": "useCommonUserId",
                     "paramValue": false,
                     "type": "EQUALS"
                   }

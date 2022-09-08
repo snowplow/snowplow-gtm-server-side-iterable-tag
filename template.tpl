@@ -256,32 +256,27 @@ ___TEMPLATE_PARAMETERS___
             "alwaysInSummary": true
           },
           {
-            "type": "CHECKBOX",
-            "name": "includeAllEntities",
-            "checkboxText": "Include all Entities in event properties",
-            "simpleValueType": true,
-            "defaultValue": true,
-            "alwaysInSummary": true
-          },
-          {
-            "type": "CHECKBOX",
-            "name": "includeUnmappedEntities",
-            "checkboxText": "Include unmapped entities in event data",
-            "simpleValueType": true,
-            "enablingConditions": [
+            "type": "SELECT",
+            "name": "includeEntities",
+            "displayName": "Include Snowplow Entities in event properties",
+            "macrosInSelect": false,
+            "selectItems": [
               {
-                "paramName": "includeAllEntities",
-                "paramValue": false,
-                "type": "EQUALS"
+                "value": "all",
+                "displayValue": "All"
+              },
+              {
+                "value": "none",
+                "displayValue": "None"
               }
             ],
-            "defaultValue": false,
-            "help": "Any entites not found by the below mapping rules will be included in the event data."
+            "simpleValueType": true,
+            "defaultValue": "all"
           },
           {
             "type": "SIMPLE_TABLE",
             "name": "entityMappingRules",
-            "displayName": "Snowplow Entity Mapping",
+            "displayName": "Snowplow Entities to Add/Edit mapping",
             "simpleTableColumns": [
               {
                 "defaultValue": "",
@@ -304,7 +299,7 @@ ___TEMPLATE_PARAMETERS___
                 "valueHint": ""
               },
               {
-                "defaultValue": "eventData",
+                "defaultValue": "event_properties",
                 "displayName": "Include as event data or user data field",
                 "name": "propertiesObjectToPopulate",
                 "type": "SELECT",
@@ -317,22 +312,86 @@ ___TEMPLATE_PARAMETERS___
                     "value": "user_properties",
                     "displayValue": "user data"
                   }
+                ],
+                "valueValidators": [
+                  {
+                    "type": "NON_EMPTY"
+                  }
+                ]
+              },
+              {
+                "defaultValue": "control",
+                "displayName": "Apply to all versions",
+                "name": "version",
+                "type": "SELECT",
+                "valueValidators": [
+                  {
+                    "type": "NON_EMPTY"
+                  }
+                ],
+                "selectItems": [
+                  {
+                    "value": "control",
+                    "displayValue": "False"
+                  },
+                  {
+                    "value": "free",
+                    "displayValue": "True"
+                  }
+                ]
+              }
+            ],
+            "enablingConditions": [],
+            "help": "Specifiy the Entity name from the GTM Event, and the key you could like to map it to or leave the mapped key blank to keep the same name. Additionally specify whether to add in event properties or user properties object of the Iterable payload and whether you wish the mapping to apply to all versions of the entity.",
+            "valueValidators": []
+          },
+          {
+            "type": "SIMPLE_TABLE",
+            "name": "entityExclusionRules",
+            "displayName": "Snowplow Entities to Exclude",
+            "simpleTableColumns": [
+              {
+                "defaultValue": "",
+                "displayName": "Entity Name",
+                "name": "key",
+                "type": "TEXT",
+                "isUnique": true,
+                "valueValidators": [
+                  {
+                    "type": "NON_EMPTY"
+                  }
+                ]
+              },
+              {
+                "defaultValue": "control",
+                "displayName": "Apply to all versions",
+                "name": "version",
+                "type": "SELECT",
+                "valueValidators": [
+                  {
+                    "type": "NON_EMPTY"
+                  }
+                ],
+                "selectItems": [
+                  {
+                    "value": "control",
+                    "displayValue": "False"
+                  },
+                  {
+                    "value": "free",
+                    "displayValue": "True"
+                  }
                 ]
               }
             ],
             "enablingConditions": [
               {
-                "paramName": "includeAllEntities",
-                "paramValue": false,
+                "paramName": "includeEntities",
+                "paramValue": "all",
                 "type": "EQUALS"
               }
             ],
-            "help": "Specifiy the Entity name from the GTM Event, and the key you could like to map it to or leave the mapped key blank to keep the same name.",
-            "valueValidators": [
-              {
-                "type": "NON_EMPTY"
-              }
-            ]
+            "help": "Specify the Entity name you want to exclude from the Iterable event. Additionally, you can also set whether the exclusion applies to all versions of the entity."
           }
         ]
       }
@@ -495,6 +554,7 @@ const getTimestampMillis = require('getTimestampMillis');
 const getType = require('getType');
 const JSON = require('JSON');
 const log = require('logToConsole');
+const makeNumber = require('makeNumber');
 const sendHttpRequest = require('sendHttpRequest');
 const sha256Sync = require('sha256Sync');
 
@@ -689,69 +749,172 @@ const parseSchemaToMajorKeyValue = (schema) => {
   return schema;
 };
 
-const parseCustomEventsAndEntities = (
-  eventData,
-  tagConfig,
-  filterId,
-  populateObj
-) => {
+/*
+ * Returns whether a property name is a Snowplow self-describing event property.
+ */
+const isSpSelfDescProp = (prop) => {
+  return prop.indexOf('x-sp-self_describing_event_') === 0;
+};
+
+/*
+ * Returns whether a property name is a Snowplow context/entity property.
+ */
+const isSpContextsProp = (prop) => {
+  return prop.indexOf('x-sp-contexts_') === 0;
+};
+
+/*
+ * Given a list of entity references and an entity name,
+ * returns the index of a matching reference.
+ * Matching reference means whether the entity name starts with ref.
+ *
+ * @param entity {string} - the entity name to match
+ * @param refsList {Array} - an array of strings
+ */
+const getReferenceIdx = (entity, refsList) => {
+  for (let i = 0; i < refsList.length; i++) {
+    if (entity.indexOf(refsList[i]) === 0) {
+      return i;
+    }
+  }
+  return -1;
+};
+
+/*
+ * Filters out invalid rules to avoid unintended behavior.
+ * (e.g. version control being ignored if version num is not included in name)
+ * Assumes that a rule contains 'key' and 'version' properties.
+ */
+const cleanRules = (rules) => {
+  return rules.filter((row) => {
+    if (row.version === 'control') {
+      // last char can't be null or empty string so fine for makeNumber
+      const lastCharAsNum = makeNumber(row.key.slice(-1));
+      if (!lastCharAsNum && lastCharAsNum !== 0) {
+        // was not a digit, so invalid rule
+        return false;
+      }
+      return true;
+    }
+    return true;
+  });
+};
+
+/*
+ * Parses the entity exclusion rules from the tag configuration.
+ */
+const parseEntityExclusionRules = (tagConfig) => {
+  const rules = tagConfig.entityExclusionRules;
+  if (rules) {
+    const validRules = cleanRules(rules);
+    const excludedEntities = validRules.map((row) => {
+      const entityRef = parseSchemaToMajorKeyValue(row.key);
+      const versionFreeRef = entityRef.slice(0, -2);
+      return {
+        ref: row.version === 'control' ? entityRef : versionFreeRef,
+        version: row.version,
+      };
+    });
+    return excludedEntities;
+  }
+  return [];
+};
+
+/*
+ * Parses the entity inclusion rules from the tag configuration.
+ */
+const parseEntityRules = (tagConfig) => {
+  const rules = tagConfig.entityMappingRules;
+  if (rules) {
+    const validRules = cleanRules(rules);
+    const parsedRules = validRules.map((row) => {
+      const parsedKey = parseSchemaToMajorKeyValue(row.key);
+      const versionFreeKey = parsedKey.slice(0, -2);
+      return {
+        ref: row.version === 'control' ? parsedKey : versionFreeKey,
+        parsedKey: parsedKey,
+        mappedKey: row.mappedKey || cleanPropertyName(parsedKey),
+        target: row.propertiesObjectToPopulate,
+        version: row.version,
+      };
+    });
+    return parsedRules;
+  }
+  return [];
+};
+
+/*
+ * Given the inclusion rules and the excluded entity references,
+ * returns the final entity mapping rules.
+ */
+const finalizeEntityRules = (inclusionRules, excludedRefs) => {
+  const finalEntities = inclusionRules.filter((row) => {
+    const refIdx = getReferenceIdx(row.ref, excludedRefs);
+    return refIdx < 0;
+  });
+  return finalEntities;
+};
+
+/*
+ * Modifies the respective objects to populate according to Snowplow Event Context Rules.
+ *
+ * @param eventData {Object} - the client event object
+ * @param tagConfig {Object} - the tag configuration object
+ * @returns an Object with eventFields and userFields properties
+ */
+const parseCustomEventsAndEntities = (eventData, tagConfig) => {
+  const inclusionRules = parseEntityRules(tagConfig);
+  const exclusionRules = parseEntityExclusionRules(tagConfig);
+  const excludedRefs = exclusionRules.map((r) => r.ref);
+  const finalEntityRules = finalizeEntityRules(inclusionRules, excludedRefs);
+  const finalEntityRefs = finalEntityRules.map((r) => r.ref);
+  const eventProperties = {};
+  const userProperties = {};
+
   for (let prop in eventData) {
     if (eventData.hasOwnProperty(prop)) {
-      if (
-        filterId === 'event_properties' &&
-        tagConfig.includeSelfDescribingEvent &&
-        prop.indexOf('x-sp-self_describing_event_') === 0
-      ) {
-        populateObj[cleanPropertyName(prop)] = eventData[prop];
+      const cleanPropName = cleanPropertyName(prop);
+
+      if (isSpSelfDescProp(prop) && tagConfig.includeSelfDescribingEvent) {
+        eventProperties[cleanPropName] = eventData[prop];
+        continue;
       }
 
-      if (
-        filterId === 'event_properties' &&
-        tagConfig.includeAllEntities &&
-        prop.indexOf('x-sp-contexts_') === 0
-      ) {
-        populateObj[cleanPropertyName(prop)] = extractFromArrayIfSingleElement(
+      if (isSpContextsProp(prop)) {
+        if (getReferenceIdx(prop, excludedRefs) >= 0) {
+          continue;
+        }
+
+        const ctxVal = extractFromArrayIfSingleElement(
           eventData[prop],
           tagConfig
         );
-      } else if (
-        !tagConfig.includeAllEntities &&
-        prop.indexOf('x-sp-contexts_') === 0
-        // if includeAllEntities is false, then entityMappingRules is enabled
-        // if enabled,entityMappingRules is a non-empty array(by validation rule)
-      ) {
-        let mapped = false;
-        const mappingRules = tagConfig.entityMappingRules;
-
-        for (let i = 0; i < mappingRules.length; i++) {
-          const rule = mappingRules[i];
-          if (rule.propertiesObjectToPopulate === filterId) {
-            const parsedSchemaKey = parseSchemaToMajorKeyValue(rule.key);
-            if (prop === parsedSchemaKey) {
-              const mappedKeyName =
-                rule.mappedKey || cleanPropertyName(parsedSchemaKey);
-              populateObj[mappedKeyName] = extractFromArrayIfSingleElement(
-                eventData[prop],
-                tagConfig
-              );
-              mapped = true;
-              break;
-            }
+        const refIdx = getReferenceIdx(prop, finalEntityRefs);
+        if (refIdx >= 0) {
+          const rule = finalEntityRules[refIdx];
+          const target =
+            rule.target === 'event_properties' ? eventProperties : userProperties;
+          target[rule.mappedKey] = ctxVal;
+        } else {
+          if (tagConfig.includeEntities === 'none') {
+            continue;
           }
-        }
-
-        if (!mapped && tagConfig.includeUnmappedEntities) {
-          populateObj[cleanPropertyName(prop)] =
-            extractFromArrayIfSingleElement(eventData[prop], tagConfig);
+          // here includedEntities is 'all' and prop is not excluded
+          eventProperties[cleanPropName] = ctxVal;
         }
       }
     }
   }
-  return populateObj;
+  return {
+    event: eventProperties,
+    user: userProperties,
+  };
 };
 
-// Iterable Tag specific helpers
-const mkEventDataFields = (eventData, tagConfig) => {
+/*
+ * Creates the `dataFields` for the Iterable payload towards /events/track API.
+ */
+const mkEventDataFields = (eventData, tagConfig, eventSpFields) => {
   let eventProperties = {};
   if (tagConfig.includeCommonEventProperties) {
     eventProperties.page_location = eventData.page_location;
@@ -769,17 +932,14 @@ const mkEventDataFields = (eventData, tagConfig) => {
     ]);
   }
 
-  const final = parseCustomEventsAndEntities(
-    eventData,
-    tagConfig,
-    'event_properties',
-    eventProperties
-  );
-
+  const final = merge([eventProperties, eventSpFields]);
   return cleanObject(final);
 };
 
-const mkUserDataFields = (eventData, tagConfig) => {
+/*
+ * Creates the `dataFields` for the Iterable payload towards /users/update API.
+ */
+const mkUserDataFields = (eventData, tagConfig, userSpFields) => {
   let userProperties = {};
   if (tagConfig.includeCommonUserProperties && eventData.user_data) {
     // not adding user_data.email_address, to avoid redundant reference to email
@@ -794,16 +954,16 @@ const mkUserDataFields = (eventData, tagConfig) => {
     ]);
   }
 
-  const final = parseCustomEventsAndEntities(
-    eventData,
-    tagConfig,
-    'user_properties',
-    userProperties
-  );
-
+  const final = merge([userProperties, userSpFields]);
   return cleanObject(final);
 };
 
+/*
+ * Helper function to locate a user identifier from a given table (locator).
+ * A locator is a table (array of objects) like the `email` and `userId` tables,
+ * which are Tag configuration Fields.
+ * Each of its rows contains a priority and an event key path to look for.
+ */
 const locate = (locator) => {
   const ordLoc = locator.sort((x, y) => {
     return x.priority > y.priority ? -1 : 1;
@@ -820,6 +980,9 @@ const locate = (locator) => {
   return undefined;
 };
 
+/*
+ * Determines if an event is an identity event depending on Tag configuration.
+ */
 const isIdentityEvent = (eventData, tagConfig) => {
   if (tagConfig.useDefaultIdentify) {
     return eventData.event_name === 'identify';
@@ -833,6 +996,12 @@ const isIdentityEvent = (eventData, tagConfig) => {
   return false;
 };
 
+/*
+ * Creates an identifiers object, which has properties:
+ *  - email
+ *  - userId
+ * See also: iglu:com.snowplowanalytics.snowplow/identify/jsonschema/1-0-0
+ */
 const mkIdentifiers = (eventData, tagConfig) => {
   const idLocations = {
     email: tagConfig.useCommonEmail ? defaultIds.email : tagConfig.email,
@@ -846,7 +1015,16 @@ const mkIdentifiers = (eventData, tagConfig) => {
   return cleanObject(userIdentifiers);
 };
 
-const mkIterableEvent = (eventData, tagConfig, ids) => {
+/*
+ * Creates the Iterable payload for /events/track API.
+ *
+ * @param eventData {Object} - the GTM-SS client event object
+ * @param tagConfig {Object} - the Tag configuration
+ * @param ids {Object} - the identifiers object
+ * @param eventSpFields {Object} - the dataFields from Snowplow Event Mapping Options
+ * @returns the payload object
+ */
+const mkIterableEvent = (eventData, tagConfig, ids, eventSpFields) => {
   const eventBody = {
     email: ids.email,
     userId: ids.userId,
@@ -856,24 +1034,36 @@ const mkIterableEvent = (eventData, tagConfig, ids) => {
       sha256Sync(
         eventData.event_name + eventData.client_id + getTimestampMillis()
       ),
-    dataFields: mkEventDataFields(eventData, tagConfig),
+    dataFields: mkEventDataFields(eventData, tagConfig, eventSpFields),
   };
 
   return cleanObject(eventBody);
 };
 
-const mkIterableUserData = (eventData, tagConfig, ids) => {
+/*
+ * Creates the Iterable payload for /users/update API.
+ *
+ * @param eventData {Object} - the GTM-SS client event object
+ * @param tagConfig {Object} - the Tag configuration
+ * @param ids {Object} - the identifiers object
+ * @param userSpFields {Object} - the dataFields from Snowplow Event Mapping Options
+ * @returns the payload object
+ */
+const mkIterableUserData = (eventData, tagConfig, ids, userSpFields) => {
   const userDataBody = {
     email: ids.email,
     userId: ids.userId,
     preferUserId: false,
     mergeNestedObjects: tagConfig.mergeNestedUserData,
-    dataFields: mkUserDataFields(eventData, tagConfig),
+    dataFields: mkUserDataFields(eventData, tagConfig, userSpFields),
   };
 
   return cleanObject(userDataBody);
 };
 
+/*
+ * Determines if an API response means 'No user exists with userId'.
+ */
 const isNoUidResponse = (body) => {
   const checkCode = 'BadParams';
   const checkMsg = 'No user exists with userId';
@@ -882,15 +1072,22 @@ const isNoUidResponse = (body) => {
   return respBody.code === checkCode && respBody.msg.indexOf(checkMsg) === 0;
 };
 
+/*
+ * Given an iterable payload:
+ *  - creates a placeholder email from userId (assumes userId exists)
+ *  - adds it in the payload (side effects)
+ */
 const addPlaceholderEmail = (iterableData) => {
-  // assumes userId
   const placeholderEmail = iterableData.userId + iterablePlaceholderDomain;
-
-  // side effect
   iterableData.email = placeholderEmail;
   return iterableData;
 };
 
+/*
+ * Tracks an event using userId as user identifier.
+ * If it fails because no user exists with that userId,
+ * makes placeholder email and tracks the event.
+ */
 const trackWithUserIdPath = (iterableEvent, opts, logFun) => {
   logFun('Request', {
     requestMethod: opts.method,
@@ -920,6 +1117,9 @@ const trackWithUserIdPath = (iterableEvent, opts, logFun) => {
   );
 };
 
+/*
+ * Tracks an event using email as user identifier.
+ */
 const trackWithEmailPath = (iterableEvent, opts, logFun) => {
   logFun('Request', {
     requestMethod: opts.method,
@@ -944,6 +1144,9 @@ const trackWithEmailPath = (iterableEvent, opts, logFun) => {
   );
 };
 
+/*
+ * Makes placeholder email from userId and hands over to updateWithEmailPath.
+ */
 const updateWithUserIdPath = (
   iterableEvent,
   iterableUserData,
@@ -956,6 +1159,9 @@ const updateWithUserIdPath = (
   return updateWithEmailPath(updatedEvent, updatedUserData, httpOptions);
 };
 
+/*
+ * Updates the user by email and then tracks the event.
+ */
 const updateWithEmailPath = (
   iterableEvent,
   iterableUserData,
@@ -1053,10 +1259,10 @@ if (!(identifiers.email || identifiers.userId)) {
   }
 }
 
-const iterableEvent = mkIterableEvent(eventData, data, identifiers);
-
+const spRules = parseCustomEventsAndEntities(eventData, data);
+const iterableEvent = mkIterableEvent(eventData, data, identifiers, spRules.event);
 if (isIdentityEvent(eventData, data)) {
-  const iterableUserData = mkIterableUserData(eventData, data, identifiers);
+  const iterableUserData = mkIterableUserData(eventData, data, identifiers, spRules.user);
   if (identifiers.email) {
     return updateWithEmailPath(
       iterableEvent,
@@ -1238,7 +1444,7 @@ scenarios:
       useDefaultIdentify: true,
       includeSelfDescribingEvent: true,
       extractFromArray: true,
-      includeAllEntities: true,
+      includeEntities: 'all',
       includeCommonEventProperties: true,
       includeCommonUserProperties: true,
       mergeNestedUserData: false,
@@ -1371,7 +1577,7 @@ scenarios:
       identityEventsByName: ['sign_up'],
       includeSelfDescribingEvent: true,
       extractFromArray: true,
-      includeAllEntities: true,
+      includeEntities: 'all',
       includeCommonEventProperties: true,
       includeCommonUserProperties: true,
       mergeNestedUserData: false,
@@ -1538,7 +1744,7 @@ scenarios:
       identityEventsByName: ['sign_up'],
       includeSelfDescribingEvent: true,
       extractFromArray: true,
-      includeAllEntities: true,
+      includeEntities: 'all',
       includeCommonEventProperties: true,
       includeCommonUserProperties: true,
       mergeNestedUserData: false,
@@ -1682,7 +1888,7 @@ scenarios:
 
     // assert 'no' does not log in debug
     assertApi('logToConsole').wasNotCalled();
-- name: Test Snowplow settings
+- name: Test Snowplow settings - include self-describing
   code: |
     const mockData = {
       apiKey: 'test',
@@ -1692,41 +1898,27 @@ scenarios:
       useDefaultIdentify: true,
       includeSelfDescribingEvent: true,
       extractFromArray: false,
-      includeAllEntities: false,
-      includeUnmappedEntities: false,
-      entityMappingRules: [
-        {
-          key: 'iglu:com.snowplowanalytics.snowplow/web_page/jsonschema/1-0-0',
-          mappedKey: 'webPage',
-          propertiesObjectToPopulate: 'event_properties',
-        },
-        {
-          key: 'x-sp-contexts_com_snowplowanalytics_snowplow_ua_parser_context_1',
-          mappedKey: 'uaParser',
-          propertiesObjectToPopulate: 'user_properties',
-        },
-      ],
+      includeEntities: 'none',
       includeCommonEventProperties: true,
       includeCommonUserProperties: true,
       mergeNestedUserData: false,
       logType: 'debug',
     };
 
-    const testEvent = mockEventObjectPageView;
+    const testEvent = mockEventObjectSelfDesc;
     const expectedIterableBody = {
-      email: 'foo@example.com',
-      userId: 'snow123',
-      eventName: 'page_view',
-      id: '8676de79-0eba-4435-ad95-8a41a8a0129c',
+      email: 'foo@test.io',
+      userId: 'tester',
+      eventName: 'media_player_event',
+      id: 'c2084e30-5e4f-4d9c-86b2-e0bc3781509a',
       dataFields: {
-        page_location: 'https://snowplow.io/',
-        page_encoding: 'UTF-8',
-        page_referrer: 'referer',
-        page_title:
-          'Collect, manage and operationalize behavioral data at scale | Snowplow',
+        page_location: 'http://localhost:8000/',
+        page_encoding: 'windows-1252',
         screen_resolution: '1920x1080',
-        viewport_size: '745x1302',
-        webPage: [{ id: 'a86c42e5-b831-45c8-b706-e214c26b4b3d' }],
+        viewport_size: '1044x975',
+        self_describing_event_com_snowplowanalytics_snowplow_media_player_event_1: {
+          type: 'play',
+        },
       },
     };
 
@@ -1782,6 +1974,1006 @@ scenarios:
 
     // assert 'debug' does not log in prod
     assertApi('logToConsole').wasNotCalled();
+- name: Test entity rules - include all - edit
+  code: |
+    const mockData = {
+      apiKey: 'test',
+      useClientIdFallback: true,
+      useCommonEmail: true,
+      useCommonUserId: true,
+      useDefaultIdentify: false,
+      identityEventsByName: ['media_player_event'], // for testing purposes
+      includeSelfDescribingEvent: false,
+      extractFromArray: true,
+      includeEntities: 'all',
+      entityMappingRules: [
+        {
+          key: 'x-sp-contexts_com_snowplowanalytics_snowplow_mobile_context_1',
+          mappedKey: 'mobile_context',
+          propertiesObjectToPopulate: 'user_properties',
+          version: 'control',
+        },
+        {
+          key: 'iglu:com.youtube/youtube/jsonschema/1-0-0',
+          mappedKey: 'youtube',
+          propertiesObjectToPopulate: 'event_properties',
+          version: 'control',
+        },
+        {
+          key: 'contexts_com_snowplowanalytics_snowplow_media_player_1',
+          mappedKey: 'media_player',
+          propertiesObjectToPopulate: 'event_properties',
+          version: 'control',
+        },
+        {
+          key: 'contexts_com_google_tag-manager_server-side_user_data_1',
+          mappedKey: 'user_data_by_rule',
+          propertiesObjectToPopulate: 'user_properties',
+          version: 'control',
+        },
+      ],
+      includeCommonEventProperties: true,
+      includeCommonUserProperties: true,
+      mergeNestedUserData: false,
+      logType: 'no',
+    };
+
+    const testEvent = mockEventObjectSelfDesc;
+    const expectedIterableUpdateBody = {
+      email: 'foo@test.io',
+      userId: 'tester',
+      preferUserId: false,
+      mergeNestedObjects: false,
+      dataFields: {
+        user_data_by_rule: { email_address: 'foo@test.io' },
+        mobile_context: {
+          osType: 'myOsType',
+          osVersion: 'myOsVersion',
+          deviceManufacturer: 'myDevMan',
+          deviceModel: 'myDevModel',
+        },
+      },
+    };
+    const expectedIterableTrackBody = {
+      email: 'foo@test.io',
+      userId: 'tester',
+      eventName: 'media_player_event',
+      id: 'c2084e30-5e4f-4d9c-86b2-e0bc3781509a',
+      dataFields: {
+        page_location: 'http://localhost:8000/',
+        page_encoding: 'windows-1252',
+        screen_resolution: '1920x1080',
+        viewport_size: '1044x975',
+        youtube: {
+          autoPlay: false,
+          avaliablePlaybackRates: [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2],
+          buffering: false,
+          controls: true,
+          cued: false,
+          loaded: 3,
+          playbackQuality: 'medium',
+          playerId: 'youtube-song',
+          unstarted: false,
+          url: 'https://www.youtube.com/watch?v=foobarbaz',
+          avaliableQualityLevels: [
+            'hd1080',
+            'hd720',
+            'large',
+            'medium',
+            'small',
+            'tiny',
+            'auto',
+          ],
+        },
+        media_player: {
+          currentTime: 0.015303093460083008,
+          duration: 190.301,
+          ended: false,
+          loop: false,
+          muted: false,
+          paused: false,
+          playbackRate: 1,
+          volume: 100,
+        },
+        contexts_com_snowplowanalytics_snowplow_web_page_1: {
+          id: '68027aa2-34b1-4018-95e3-7176c62dbc84',
+        },
+        contexts_com_snowplowanalytics_snowplow_client_session_1: {
+          userId: 'fd0e5288-e89b-45df-aad5-6d0c6eda6198',
+          sessionId: '1ab28b79-bfdd-4855-9bf1-5199ce15beac',
+          eventIndex: 24,
+          sessionIndex: 1,
+          previousSessionId: null,
+          storageMechanism: 'COOKIE_1',
+          firstEventId: '40fbdb30-1b99-42a3-99f7-850dacf5be43',
+          firstEventTimestamp: '2022-07-23T09:08:04.451Z',
+        },
+      },
+    };
+
+    // to assert on
+    let updUrl, updCallback, updOptions, updBody;
+    let trUrl, trCallback, trOptions, trBody;
+
+    // Mocks
+    mock('sendHttpRequest', function () {
+      // mock response
+      const respStatusCode = 200;
+      const respHeaders = { foo: 'bar' };
+      const respBody = 'ok';
+
+      if (arguments[0] === updateURL) {
+        updUrl = arguments[0];
+        updCallback = arguments[1];
+        updOptions = arguments[2];
+        updBody = arguments[3];
+
+        // and call the update callback with mock response
+        updCallback(respStatusCode, respHeaders, respBody);
+      } else {
+        trUrl = arguments[0];
+        trCallback = arguments[1];
+        trOptions = arguments[2];
+        trBody = arguments[3];
+
+        // and call the track callback with mock response
+        trCallback(respStatusCode, respHeaders, respBody);
+      }
+    });
+
+    mock('getAllEventData', function () {
+      return testEvent;
+    });
+    mock('getEventData', function (x) {
+      return getFromPath(x, testEvent);
+    });
+
+    // Call runCode to run the template's code
+    runCode(mockData);
+
+    // Assert
+    // In this test the input is an identity event
+    // so we expect sendHttpRequest to have been called twice.
+    assertApi('sendHttpRequest').wasCalled();
+    assertApi('sendHttpRequest').wasCalledWith(
+      updUrl,
+      updCallback,
+      updOptions,
+      updBody
+    );
+    assertApi('sendHttpRequest').wasCalledWith(
+      trUrl,
+      trCallback,
+      trOptions,
+      trBody
+    );
+
+    const updateBody = jsonApi.parse(updBody);
+    assertThat(updateBody).isEqualTo(expectedIterableUpdateBody);
+
+    const trackBody = jsonApi.parse(trBody);
+    assertThat(trackBody).isEqualTo(expectedIterableTrackBody);
+- name: Test entity rules - include none - version control
+  code: |
+    const mockData = {
+      apiKey: 'test',
+      useClientIdFallback: true,
+      useCommonEmail: true,
+      useCommonUserId: true,
+      useDefaultIdentify: false,
+      identityEventsByName: ['media_player_event'], // for testing purposes
+      includeSelfDescribingEvent: false,
+      extractFromArray: true,
+      includeEntities: 'none',
+      entityMappingRules: [
+        {
+          key: 'iglu:com.youtube/youtube/jsonschema/1-5-0',
+          mappedKey: 'youtube',
+          propertiesObjectToPopulate: 'event_properties',
+          version: 'free',
+        },
+        {
+          key: 'contexts_com_snowplowanalytics_snowplow_media_player_1',
+          mappedKey: 'media_player',
+          propertiesObjectToPopulate: 'event_properties',
+          version: 'control',
+        },
+        {
+          key: 'contexts_com_google_tag-manager_server-side_user_data_5',
+          mappedKey: 'user_data',
+          propertiesObjectToPopulate: 'user_properties',
+          version: 'free',
+        },
+      ],
+      includeCommonEventProperties: true,
+      includeCommonUserProperties: true,
+      mergeNestedUserData: false,
+      logType: 'no',
+    };
+
+    const testEvent = mockEventObjectSelfDesc;
+    const expectedIterableUpdateBody = {
+      email: 'foo@test.io',
+      userId: 'tester',
+      preferUserId: false,
+      mergeNestedObjects: false,
+      dataFields: { user_data: { email_address: 'foo@test.io' } },
+    };
+    const expectedIterableTrackBody = {
+      email: 'foo@test.io',
+      userId: 'tester',
+      eventName: 'media_player_event',
+      id: 'c2084e30-5e4f-4d9c-86b2-e0bc3781509a',
+      dataFields: {
+        page_location: 'http://localhost:8000/',
+        page_encoding: 'windows-1252',
+        screen_resolution: '1920x1080',
+        viewport_size: '1044x975',
+        youtube: {
+          autoPlay: false,
+          avaliablePlaybackRates: [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2],
+          buffering: false,
+          controls: true,
+          cued: false,
+          loaded: 3,
+          playbackQuality: 'medium',
+          playerId: 'youtube-song',
+          unstarted: false,
+          url: 'https://www.youtube.com/watch?v=foobarbaz',
+          avaliableQualityLevels: [
+            'hd1080',
+            'hd720',
+            'large',
+            'medium',
+            'small',
+            'tiny',
+            'auto',
+          ],
+        },
+        media_player: {
+          currentTime: 0.015303093460083008,
+          duration: 190.301,
+          ended: false,
+          loop: false,
+          muted: false,
+          paused: false,
+          playbackRate: 1,
+          volume: 100,
+        },
+      },
+    };
+
+    // to assert on
+    let updUrl, updCallback, updOptions, updBody;
+    let trUrl, trCallback, trOptions, trBody;
+
+    // Mocks
+    mock('sendHttpRequest', function () {
+      // mock response
+      const respStatusCode = 200;
+      const respHeaders = { foo: 'bar' };
+      const respBody = 'ok';
+
+      if (arguments[0] === updateURL) {
+        updUrl = arguments[0];
+        updCallback = arguments[1];
+        updOptions = arguments[2];
+        updBody = arguments[3];
+
+        // and call the update callback with mock response
+        updCallback(respStatusCode, respHeaders, respBody);
+      } else {
+        trUrl = arguments[0];
+        trCallback = arguments[1];
+        trOptions = arguments[2];
+        trBody = arguments[3];
+
+        // and call the track callback with mock response
+        trCallback(respStatusCode, respHeaders, respBody);
+      }
+    });
+
+    mock('getAllEventData', function () {
+      return testEvent;
+    });
+    mock('getEventData', function (x) {
+      return getFromPath(x, testEvent);
+    });
+
+    // Call runCode to run the template's code
+    runCode(mockData);
+
+    // Assert
+    // In this test the input is an identity event
+    // so we expect sendHttpRequest to have been called twice.
+    assertApi('sendHttpRequest').wasCalled();
+    assertApi('sendHttpRequest').wasCalledWith(
+      updUrl,
+      updCallback,
+      updOptions,
+      updBody
+    );
+    assertApi('sendHttpRequest').wasCalledWith(
+      trUrl,
+      trCallback,
+      trOptions,
+      trBody
+    );
+
+    const updateBody = jsonApi.parse(updBody);
+    assertThat(updateBody).isEqualTo(expectedIterableUpdateBody);
+
+    const trackBody = jsonApi.parse(trBody);
+    assertThat(trackBody).isEqualTo(expectedIterableTrackBody);
+- name: Test entity rules - exclude - version control
+  code: |
+    const mockData = {
+      apiKey: 'test',
+      useClientIdFallback: true,
+      useCommonEmail: true,
+      useCommonUserId: true,
+      useDefaultIdentify: false,
+      identityEventsByName: ['media_player_event'], // for testing purposes
+      includeSelfDescribingEvent: false,
+      extractFromArray: true,
+      includeEntities: 'all',
+      entityMappingRules: [
+        {
+          key: 'iglu:com.youtube/youtube/jsonschema/1-0-0',
+          mappedKey: 'youtube',
+          propertiesObjectToPopulate: 'event_properties',
+          version: 'control',
+        },
+        {
+          key: 'contexts_com_snowplowanalytics_snowplow_media_player_1',
+          mappedKey: 'media_player',
+          propertiesObjectToPopulate: 'event_properties',
+          version: 'control',
+        },
+        {
+          key: 'contexts_com_google_tag-manager_server-side_user_data_1',
+          mappedKey: 'user_data',
+          propertiesObjectToPopulate: 'user_properties',
+          version: 'control',
+        },
+      ],
+      entityExclusionRules: [
+        {
+          key: 'contexts_com_snowplowanalytics_snowplow_web_page_1',
+          version: 'control',
+        },
+        {
+          key: 'iglu:com.snowplowanalytics.snowplow/client_session/jsonschema/1-0-2',
+          version: 'control',
+        },
+        {
+          key: 'x-sp-contexts_com_snowplowanalytics_snowplow_mobile_context_1',
+          version: 'control',
+        },
+      ],
+      includeCommonEventProperties: true,
+      includeCommonUserProperties: true,
+      mergeNestedUserData: false,
+      logType: 'no',
+    };
+
+    const testEvent = mockEventObjectSelfDesc;
+    const expectedIterableUpdateBody = {
+      email: 'foo@test.io',
+      userId: 'tester',
+      preferUserId: false,
+      mergeNestedObjects: false,
+      dataFields: { user_data: { email_address: 'foo@test.io' } },
+    };
+    const expectedIterableTrackBody = {
+      email: 'foo@test.io',
+      userId: 'tester',
+      eventName: 'media_player_event',
+      id: 'c2084e30-5e4f-4d9c-86b2-e0bc3781509a',
+      dataFields: {
+        page_location: 'http://localhost:8000/',
+        page_encoding: 'windows-1252',
+        screen_resolution: '1920x1080',
+        viewport_size: '1044x975',
+        youtube: {
+          autoPlay: false,
+          avaliablePlaybackRates: [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2],
+          buffering: false,
+          controls: true,
+          cued: false,
+          loaded: 3,
+          playbackQuality: 'medium',
+          playerId: 'youtube-song',
+          unstarted: false,
+          url: 'https://www.youtube.com/watch?v=foobarbaz',
+          avaliableQualityLevels: [
+            'hd1080',
+            'hd720',
+            'large',
+            'medium',
+            'small',
+            'tiny',
+            'auto',
+          ],
+        },
+        media_player: {
+          currentTime: 0.015303093460083008,
+          duration: 190.301,
+          ended: false,
+          loop: false,
+          muted: false,
+          paused: false,
+          playbackRate: 1,
+          volume: 100,
+        },
+      },
+    };
+
+    // to assert on
+    let updUrl, updCallback, updOptions, updBody;
+    let trUrl, trCallback, trOptions, trBody;
+
+    // Mocks
+    mock('sendHttpRequest', function () {
+      // mock response
+      const respStatusCode = 200;
+      const respHeaders = { foo: 'bar' };
+      const respBody = 'ok';
+
+      if (arguments[0] === updateURL) {
+        updUrl = arguments[0];
+        updCallback = arguments[1];
+        updOptions = arguments[2];
+        updBody = arguments[3];
+
+        // and call the update callback with mock response
+        updCallback(respStatusCode, respHeaders, respBody);
+      } else {
+        trUrl = arguments[0];
+        trCallback = arguments[1];
+        trOptions = arguments[2];
+        trBody = arguments[3];
+
+        // and call the track callback with mock response
+        trCallback(respStatusCode, respHeaders, respBody);
+      }
+    });
+
+    mock('getAllEventData', function () {
+      return testEvent;
+    });
+    mock('getEventData', function (x) {
+      return getFromPath(x, testEvent);
+    });
+
+    // Call runCode to run the template's code
+    runCode(mockData);
+
+    // Assert
+    // In this test the input is an identity event
+    // so we expect sendHttpRequest to have been called twice.
+    assertApi('sendHttpRequest').wasCalled();
+    assertApi('sendHttpRequest').wasCalledWith(
+      updUrl,
+      updCallback,
+      updOptions,
+      updBody
+    );
+    assertApi('sendHttpRequest').wasCalledWith(
+      trUrl,
+      trCallback,
+      trOptions,
+      trBody
+    );
+
+    const updateBody = jsonApi.parse(updBody);
+    assertThat(updateBody).isEqualTo(expectedIterableUpdateBody);
+
+    const trackBody = jsonApi.parse(trBody);
+    assertThat(trackBody).isEqualTo(expectedIterableTrackBody);
+- name: Test entity rules - versioning cases - 1
+  code: |
+    const mockData = {
+      apiKey: 'test',
+      useClientIdFallback: true,
+      useCommonEmail: true,
+      useCommonUserId: true,
+      useDefaultIdentify: false,
+      identityEventsByName: ['media_player_event'], // for testing purposes
+      includeSelfDescribingEvent: false,
+      extractFromArray: true,
+      includeEntities: 'all',
+      entityMappingRules: [
+        {
+          key: 'x-sp-contexts_com_snowplowanalytics_snowplow_client_session_1',
+          mappedKey: 'client_session_context',
+          propertiesObjectToPopulate: 'event_properties',
+          version: 'control', // control include
+        },
+        {
+          key: 'iglu:com.youtube/youtube/jsonschema/1-0-0',
+          mappedKey: 'youtube',
+          propertiesObjectToPopulate: 'event_properties',
+          version: 'control', // control include
+        },
+        {
+          key: 'contexts_com_snowplowanalytics_snowplow_media_player_1',
+          mappedKey: 'media_player',
+          propertiesObjectToPopulate: 'event_properties',
+          version: 'free', // free include
+        },
+        {
+          key: 'contexts_com_google_tag-manager_server-side_user_data',
+          mappedKey: 'user_data',
+          propertiesObjectToPopulate: 'user_properties',
+          version: 'free', // free include
+        },
+      ],
+      entityExclusionRules: [
+        {
+          key: 'contexts_com_snowplowanalytics_snowplow_web_page_1',
+          version: 'control',
+        },
+        {
+          key: 'x-sp-contexts_com_snowplowanalytics_snowplow_mobile_context_1',
+          version: 'control',
+        },
+        // below we exclude entities also included
+        {
+          key: 'iglu:com.snowplowanalytics.snowplow/client_session/jsonschema/1-0-2',
+          version: 'control', // control exclude
+        },
+        {
+          key: 'contexts_com_youtube_youtube_1',
+          version: 'free', // free exclude
+        },
+        {
+          key: 'contexts_com_snowplowanalytics_snowplow_media_player_1',
+          version: 'control', // control exclude
+        },
+        {
+          key: 'contexts_com_google_tag-manager_server-side_user_data',
+          version: 'free', // free exclude
+        },
+      ],
+      includeCommonEventProperties: true,
+      includeCommonUserProperties: true,
+      mergeNestedUserData: false,
+      logType: 'no',
+    };
+
+    const testEvent = mockEventObjectSelfDesc;
+    const expectedIterableUpdateBody = {
+      email: 'foo@test.io',
+      userId: 'tester',
+      preferUserId: false,
+      mergeNestedObjects: false,
+      dataFields: {},
+    };
+    const expectedIterableTrackBody = {
+      email: 'foo@test.io',
+      userId: 'tester',
+      eventName: 'media_player_event',
+      id: 'c2084e30-5e4f-4d9c-86b2-e0bc3781509a',
+      dataFields: {
+        page_location: 'http://localhost:8000/',
+        page_encoding: 'windows-1252',
+        screen_resolution: '1920x1080',
+        viewport_size: '1044x975',
+      },
+    };
+
+    // to assert on
+    let updUrl, updCallback, updOptions, updBody;
+    let trUrl, trCallback, trOptions, trBody;
+
+    // Mocks
+    mock('sendHttpRequest', function () {
+      // mock response
+      const respStatusCode = 200;
+      const respHeaders = { foo: 'bar' };
+      const respBody = 'ok';
+
+      if (arguments[0] === updateURL) {
+        updUrl = arguments[0];
+        updCallback = arguments[1];
+        updOptions = arguments[2];
+        updBody = arguments[3];
+
+        // and call the update callback with mock response
+        updCallback(respStatusCode, respHeaders, respBody);
+      } else {
+        trUrl = arguments[0];
+        trCallback = arguments[1];
+        trOptions = arguments[2];
+        trBody = arguments[3];
+
+        // and call the track callback with mock response
+        trCallback(respStatusCode, respHeaders, respBody);
+      }
+    });
+
+    mock('getAllEventData', function () {
+      return testEvent;
+    });
+    mock('getEventData', function (x) {
+      return getFromPath(x, testEvent);
+    });
+
+    // Call runCode to run the template's code
+    runCode(mockData);
+
+    // Assert
+    // In this test the input is an identity event
+    // so we expect sendHttpRequest to have been called twice.
+    assertApi('sendHttpRequest').wasCalled();
+    assertApi('sendHttpRequest').wasCalledWith(
+      updUrl,
+      updCallback,
+      updOptions,
+      updBody
+    );
+    assertApi('sendHttpRequest').wasCalledWith(
+      trUrl,
+      trCallback,
+      trOptions,
+      trBody
+    );
+
+    const updateBody = jsonApi.parse(updBody);
+    assertThat(updateBody).isEqualTo(expectedIterableUpdateBody);
+
+    const trackBody = jsonApi.parse(trBody);
+    assertThat(trackBody).isEqualTo(expectedIterableTrackBody);
+- name: Test entity rules - versioning cases - 2
+  code: |
+    const mockData = {
+      apiKey: 'test',
+      useClientIdFallback: true,
+      useCommonEmail: true,
+      useCommonUserId: true,
+      useDefaultIdentify: false,
+      identityEventsByName: ['media_player_event'], // for testing purposes
+      includeSelfDescribingEvent: false,
+      extractFromArray: true,
+      includeEntities: 'all',
+      entityMappingRules: [
+        {
+          key: 'x-sp-contexts_com_snowplowanalytics_snowplow_client_session_2',
+          mappedKey: 'client_session_context',
+          propertiesObjectToPopulate: 'event_properties',
+          version: 'control', // control include
+        },
+        {
+          key: 'iglu:com.youtube/youtube/jsonschema/2-0-0',
+          mappedKey: 'youtube',
+          propertiesObjectToPopulate: 'event_properties',
+          version: 'control', // control include
+        },
+        {
+          key: 'contexts_com_snowplowanalytics_snowplow_media_player_2',
+          mappedKey: 'media_player',
+          propertiesObjectToPopulate: 'event_properties',
+          version: 'free', // free include
+        },
+        {
+          key: 'contexts_com_google_tag-manager_server-side_user_data_2',
+          mappedKey: 'user_data',
+          propertiesObjectToPopulate: 'user_properties',
+          version: 'free', // free include
+        },
+      ],
+      entityExclusionRules: [
+        {
+          key: 'contexts_com_snowplowanalytics_snowplow_web_page_1',
+          version: 'control',
+        },
+        {
+          key: 'x-sp-contexts_com_snowplowanalytics_snowplow_mobile_context_1',
+          version: 'control',
+        },
+        // below we exclude entities also included
+        {
+          key: 'iglu:com.snowplowanalytics.snowplow/client_session/jsonschema/2-0-2',
+          version: 'control', // control exclude
+        },
+        {
+          key: 'contexts_com_youtube_youtube_2',
+          version: 'free', // free exclude
+        },
+        {
+          key: 'contexts_com_snowplowanalytics_snowplow_media_player_2',
+          version: 'control', // control exclude
+        },
+        {
+          key: 'contexts_com_google_tag-manager_server-side_user_data_2',
+          version: 'free', // free exclude
+        },
+      ],
+      includeCommonEventProperties: true,
+      includeCommonUserProperties: true,
+      mergeNestedUserData: false,
+      logType: 'no',
+    };
+
+    const testEvent = mockEventObjectSelfDesc;
+    const expectedIterableUpdateBody = {
+      email: 'foo@test.io',
+      userId: 'tester',
+      preferUserId: false,
+      mergeNestedObjects: false,
+      dataFields: {},
+    };
+    const expectedIterableTrackBody = {
+      email: 'foo@test.io',
+      userId: 'tester',
+      eventName: 'media_player_event',
+      id: 'c2084e30-5e4f-4d9c-86b2-e0bc3781509a',
+      dataFields: {
+        page_location: 'http://localhost:8000/',
+        page_encoding: 'windows-1252',
+        screen_resolution: '1920x1080',
+        viewport_size: '1044x975',
+        media_player: {
+          currentTime: 0.015303093460083008,
+          duration: 190.301,
+          ended: false,
+          loop: false,
+          muted: false,
+          paused: false,
+          playbackRate: 1,
+          volume: 100,
+        },
+        contexts_com_snowplowanalytics_snowplow_client_session_1: {
+          userId: 'fd0e5288-e89b-45df-aad5-6d0c6eda6198',
+          sessionId: '1ab28b79-bfdd-4855-9bf1-5199ce15beac',
+          eventIndex: 24,
+          sessionIndex: 1,
+          previousSessionId: null,
+          storageMechanism: 'COOKIE_1',
+          firstEventId: '40fbdb30-1b99-42a3-99f7-850dacf5be43',
+          firstEventTimestamp: '2022-07-23T09:08:04.451Z',
+        },
+      },
+    };
+
+    // to assert on
+    let updUrl, updCallback, updOptions, updBody;
+    let trUrl, trCallback, trOptions, trBody;
+
+    // Mocks
+    mock('sendHttpRequest', function () {
+      // mock response
+      const respStatusCode = 200;
+      const respHeaders = { foo: 'bar' };
+      const respBody = 'ok';
+
+      if (arguments[0] === updateURL) {
+        updUrl = arguments[0];
+        updCallback = arguments[1];
+        updOptions = arguments[2];
+        updBody = arguments[3];
+
+        // and call the update callback with mock response
+        updCallback(respStatusCode, respHeaders, respBody);
+      } else {
+        trUrl = arguments[0];
+        trCallback = arguments[1];
+        trOptions = arguments[2];
+        trBody = arguments[3];
+
+        // and call the track callback with mock response
+        trCallback(respStatusCode, respHeaders, respBody);
+      }
+    });
+
+    mock('getAllEventData', function () {
+      return testEvent;
+    });
+    mock('getEventData', function (x) {
+      return getFromPath(x, testEvent);
+    });
+
+    // Call runCode to run the template's code
+    runCode(mockData);
+
+    // Assert
+    // In this test the input is an identity event
+    // so we expect sendHttpRequest to have been called twice.
+    assertApi('sendHttpRequest').wasCalled();
+    assertApi('sendHttpRequest').wasCalledWith(
+      updUrl,
+      updCallback,
+      updOptions,
+      updBody
+    );
+    assertApi('sendHttpRequest').wasCalledWith(
+      trUrl,
+      trCallback,
+      trOptions,
+      trBody
+    );
+
+    const updateBody = jsonApi.parse(updBody);
+    assertThat(updateBody).isEqualTo(expectedIterableUpdateBody);
+
+    const trackBody = jsonApi.parse(trBody);
+    assertThat(trackBody).isEqualTo(expectedIterableTrackBody);
+- name: Test entity rules - versioning cases - 3
+  code: |
+    const mockData = {
+      apiKey: 'test',
+      useClientIdFallback: true,
+      useCommonEmail: true,
+      useCommonUserId: true,
+      useDefaultIdentify: false,
+      identityEventsByName: ['media_player_event'], // for testing purposes
+      includeSelfDescribingEvent: false,
+      extractFromArray: true,
+      includeEntities: 'all',
+      entityMappingRules: [
+        {
+          key: 'x-sp-contexts_com_snowplowanalytics_snowplow_client_session_2',
+          mappedKey: 'client_session_context',
+          propertiesObjectToPopulate: 'user_properties',
+          version: 'control', // control include
+        },
+        {
+          key: 'iglu:com.youtube/youtube/jsonschema/2-0-0',
+          mappedKey: 'youtube',
+          propertiesObjectToPopulate: 'user_properties',
+          version: 'control', // control include
+        },
+        {
+          key: 'contexts_com_snowplowanalytics_snowplow_media_player_2',
+          mappedKey: 'media_player',
+          propertiesObjectToPopulate: 'user_properties',
+          version: 'free', // free include
+        },
+        {
+          key: 'contexts_com_google_tag-manager_server-side_user_data_2',
+          mappedKey: 'user_data',
+          propertiesObjectToPopulate: 'user_properties',
+          version: 'free', // free include
+        },
+      ],
+      entityExclusionRules: [
+        {
+          key: 'contexts_com_snowplowanalytics_snowplow_web_page_1',
+          version: 'control',
+        },
+        {
+          key: 'x-sp-contexts_com_snowplowanalytics_snowplow_mobile_context_1',
+          version: 'control',
+        },
+        // below we exclude entities also included
+        {
+          key: 'iglu:com.snowplowanalytics.snowplow/client_session/jsonschema/2-0-2',
+          version: 'control', // control exclude
+        },
+        {
+          key: 'contexts_com_youtube_youtube_2',
+          version: 'free', // free exclude
+        },
+        {
+          key: 'contexts_com_snowplowanalytics_snowplow_media_player_2',
+          version: 'control', // control exclude
+        },
+        {
+          key: 'contexts_com_google_tag-manager_server-side_user_data_2',
+          version: 'free', // free exclude
+        },
+      ],
+      includeCommonEventProperties: true,
+      includeCommonUserProperties: true,
+      mergeNestedUserData: false,
+      logType: 'no',
+    };
+
+    const testEvent = mockEventObjectSelfDesc;
+    const expectedIterableUpdateBody = {
+      email: 'foo@test.io',
+      userId: 'tester',
+      preferUserId: false,
+      mergeNestedObjects: false,
+      dataFields: {
+        media_player: {
+          currentTime: 0.015303093460083008,
+          duration: 190.301,
+          ended: false,
+          loop: false,
+          muted: false,
+          paused: false,
+          playbackRate: 1,
+          volume: 100,
+        },
+      },
+    };
+    const expectedIterableTrackBody = {
+      email: 'foo@test.io',
+      userId: 'tester',
+      eventName: 'media_player_event',
+      id: 'c2084e30-5e4f-4d9c-86b2-e0bc3781509a',
+      dataFields: {
+        page_location: 'http://localhost:8000/',
+        page_encoding: 'windows-1252',
+        screen_resolution: '1920x1080',
+        viewport_size: '1044x975',
+        contexts_com_snowplowanalytics_snowplow_client_session_1: {
+          userId: 'fd0e5288-e89b-45df-aad5-6d0c6eda6198',
+          sessionId: '1ab28b79-bfdd-4855-9bf1-5199ce15beac',
+          eventIndex: 24,
+          sessionIndex: 1,
+          previousSessionId: null,
+          storageMechanism: 'COOKIE_1',
+          firstEventId: '40fbdb30-1b99-42a3-99f7-850dacf5be43',
+          firstEventTimestamp: '2022-07-23T09:08:04.451Z',
+        },
+      },
+    };
+
+    // to assert on
+    let updUrl, updCallback, updOptions, updBody;
+    let trUrl, trCallback, trOptions, trBody;
+
+    // Mocks
+    mock('sendHttpRequest', function () {
+      // mock response
+      const respStatusCode = 200;
+      const respHeaders = { foo: 'bar' };
+      const respBody = 'ok';
+
+      if (arguments[0] === updateURL) {
+        updUrl = arguments[0];
+        updCallback = arguments[1];
+        updOptions = arguments[2];
+        updBody = arguments[3];
+
+        // and call the update callback with mock response
+        updCallback(respStatusCode, respHeaders, respBody);
+      } else {
+        trUrl = arguments[0];
+        trCallback = arguments[1];
+        trOptions = arguments[2];
+        trBody = arguments[3];
+
+        // and call the track callback with mock response
+        trCallback(respStatusCode, respHeaders, respBody);
+      }
+    });
+
+    mock('getAllEventData', function () {
+      return testEvent;
+    });
+    mock('getEventData', function (x) {
+      return getFromPath(x, testEvent);
+    });
+
+    // Call runCode to run the template's code
+    runCode(mockData);
+
+    // Assert
+    // In this test the input is an identity event
+    // so we expect sendHttpRequest to have been called twice.
+    assertApi('sendHttpRequest').wasCalled();
+    assertApi('sendHttpRequest').wasCalledWith(
+      updUrl,
+      updCallback,
+      updOptions,
+      updBody
+    );
+    assertApi('sendHttpRequest').wasCalledWith(
+      trUrl,
+      trCallback,
+      trOptions,
+      trBody
+    );
+
+    const updateBody = jsonApi.parse(updBody);
+    assertThat(updateBody).isEqualTo(expectedIterableUpdateBody);
+
+    const trackBody = jsonApi.parse(trBody);
+    assertThat(trackBody).isEqualTo(expectedIterableTrackBody);
 - name: Test additional settings
   code: |
     const mockData = {
@@ -1790,15 +2982,9 @@ scenarios:
       useCommonEmail: true,
       useCommonUserId: true,
       useDefaultIdentify: true,
-      includeSelfDescribingEvent: true,
+      includeSelfDescribingEvent: false,
       extractFromArray: true,
-      includeAllEntities: false,
-      includeUnmappedEntities: false,
-      entityMappingRules: {
-        key: 'iglu:com.snowplowanalytics.snowplow/web_page/jsonschema/1-0-0',
-        mappedKey: 'webPage',
-        propertiesObjectToPopulate: 'event_properties',
-      },
+      includeEntities: 'none',
       includeCommonEventProperties: false,
       eventMappingRules: [
         {
@@ -1811,10 +2997,6 @@ scenarios:
         {
           key: 'x-sp-contexts_com_google_tag-manager_server-side_user_data_1.0.address.city',
           mappedKey: 'city',
-        },
-        {
-          key: 'ip_override',
-          mappedKey: 'ip',
         },
       ],
       mergeNestedUserData: false,
@@ -1829,9 +3011,6 @@ scenarios:
       id: 'c2084e30-5e4f-4d9c-86b2-e0bc3781509a',
       dataFields: {
         media_event_type: 'play',
-        self_describing_event_com_snowplowanalytics_snowplow_media_player_event_1: {
-          type: 'play',
-        },
       },
     };
 
@@ -1897,7 +3076,7 @@ scenarios:
       useDefaultIdentify: true,
       includeSelfDescribingEvent: true,
       extractFromArray: true,
-      includeAllEntities: true,
+      includeEntities: 'all',
       includeCommonEventProperties: false,
       eventMappingRules: [
         {
@@ -2045,7 +3224,7 @@ scenarios:
       useDefaultIdentify: true,
       includeSelfDescribingEvent: true,
       extractFromArray: true,
-      includeAllEntities: true,
+      includeEntities: 'all',
       includeCommonEventProperties: false,
       eventMappingRules: [
         {

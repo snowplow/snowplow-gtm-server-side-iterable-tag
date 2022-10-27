@@ -554,6 +554,7 @@ const getTimestampMillis = require('getTimestampMillis');
 const getType = require('getType');
 const JSON = require('JSON');
 const log = require('logToConsole');
+const makeInteger = require('makeInteger');
 const makeNumber = require('makeNumber');
 const sendHttpRequest = require('sendHttpRequest');
 const sha256Sync = require('sha256Sync');
@@ -566,7 +567,6 @@ const iterableEndpoints = {
   eventsTrack: iterableApi + 'events/track',
 };
 const iterablePlaceholderDomain = '@placeholder.email';
-
 const defaultIds = {
   email: [
     {
@@ -966,7 +966,9 @@ const mkUserDataFields = (eventData, tagConfig, userSpFields) => {
  */
 const locate = (locator) => {
   const ordLoc = locator.sort((x, y) => {
-    return x.priority > y.priority ? -1 : 1;
+    const xPriority = makeInteger(x.priority);
+    const yPriority = makeInteger(y.priority);
+    return xPriority > yPriority ? -1 : 1;
   });
 
   for (let i = 0; i < ordLoc.length; i++) {
@@ -1572,7 +1574,17 @@ scenarios:
             'x-sp-contexts_com_google_tag-manager_server-side_user_data_1.0.email_address',
         },
       ],
-      useCommonUserId: true,
+      useCommonUserId: false,
+      userId: [
+        {
+          priority: '90',
+          propPath: 'x-sp-contexts_com_google_tag-manager_server-side_user_data_1.0.email_address'
+        },
+        {
+          priority: '100',
+          propPath: 'user_id'
+        }
+      ],
       useDefaultIdentify: false,
       identityEventsByName: ['sign_up'],
       includeSelfDescribingEvent: true,

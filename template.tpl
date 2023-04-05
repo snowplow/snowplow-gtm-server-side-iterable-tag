@@ -1262,9 +1262,19 @@ if (!(identifiers.email || identifiers.userId)) {
 }
 
 const spRules = parseCustomEventsAndEntities(eventData, data);
-const iterableEvent = mkIterableEvent(eventData, data, identifiers, spRules.event);
+const iterableEvent = mkIterableEvent(
+  eventData,
+  data,
+  identifiers,
+  spRules.event
+);
 if (isIdentityEvent(eventData, data)) {
-  const iterableUserData = mkIterableUserData(eventData, data, identifiers, spRules.user);
+  const iterableUserData = mkIterableUserData(
+    eventData,
+    data,
+    identifiers,
+    spRules.user
+  );
   if (identifiers.email) {
     return updateWithEmailPath(
       iterableEvent,

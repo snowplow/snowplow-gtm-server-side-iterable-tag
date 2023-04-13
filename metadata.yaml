@@ -2,11 +2,16 @@ homepage: "https://www.snowplow.io"
 documentation: "https://docs.snowplow.io/docs/forwarding-events-to-destinations/forwarding-events/google-tag-manager-server-side/iterable-tag-for-gtm-ss"
 versions:
   # Latest version
+  - sha: dae305894a61eb91a6233707ed34e5e43f5cd2fd
+    changeNotes: |2
+      Run template code through prettier (#18)
+      Update copyright to 2023 (#17)
+      Fix value check when populating properties (#16)
+  # Older versions
   - sha: 193ff6ea2d95c6ffdbd4cb6f2854ff1ced27f8e8
     changeNotes: |2
       Fix priority comparison (#13)
       Add GitHub Actions (#14)
-  # Older versions
   - sha: 8821d92ed52468858b12d9a68f3572278795f60d
     changeNotes: |2
       Add option to include or exclude an entity (#5)

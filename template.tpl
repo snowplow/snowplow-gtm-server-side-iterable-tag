@@ -683,7 +683,7 @@ const getEventDataByKeys = (configProps) => {
   const props = {};
   configProps.forEach((p) => {
     let eventProperty = getEventData(p.key);
-    if (eventProperty) {
+    if (eventProperty !== undefined) {
       props[p.mappedKey || p.key] = eventProperty;
     }
   });
@@ -1262,9 +1262,19 @@ if (!(identifiers.email || identifiers.userId)) {
 }
 
 const spRules = parseCustomEventsAndEntities(eventData, data);
-const iterableEvent = mkIterableEvent(eventData, data, identifiers, spRules.event);
+const iterableEvent = mkIterableEvent(
+  eventData,
+  data,
+  identifiers,
+  spRules.event
+);
 if (isIdentityEvent(eventData, data)) {
-  const iterableUserData = mkIterableUserData(eventData, data, identifiers, spRules.user);
+  const iterableUserData = mkIterableUserData(
+    eventData,
+    data,
+    identifiers,
+    spRules.user
+  );
   if (identifiers.email) {
     return updateWithEmailPath(
       iterableEvent,
@@ -3003,6 +3013,10 @@ scenarios:
           key: 'x-sp-self_describing_event_com_snowplowanalytics_snowplow_media_player_event_1.type',
           mappedKey: 'media_event_type',
         },
+        {
+          key: 'x-sp-contexts_com_youtube_youtube_1.0.autoPlay',
+          mappedKey: 'autoPlay_in_event',
+        },
       ],
       includeCommonUserProperties: false,
       userMappingRules: [
@@ -3023,6 +3037,7 @@ scenarios:
       id: 'c2084e30-5e4f-4d9c-86b2-e0bc3781509a',
       dataFields: {
         media_event_type: 'play',
+        autoPlay_in_event: false,
       },
     };
 
@@ -3102,6 +3117,10 @@ scenarios:
           key: 'x-sp-contexts_com_google_tag-manager_server-side_user_data_1.0.address.city',
           mappedKey: 'city',
         },
+        {
+          key: 'x-sp-br_features_flash',
+          mappedKey: 'flash_in_user',
+        },
       ],
       mergeNestedUserData: false,
       logType: 'always',
@@ -3116,6 +3135,7 @@ scenarios:
       mergeNestedObjects: false,
       dataFields: {
         city: 'San Francisco',
+        flash_in_user: false,
       },
     };
     const expectedIterableTrackBody = {
@@ -3619,6 +3639,7 @@ setup: |-
     'x-sp-doc_charset': 'UTF-8',
     'x-sp-doc_width': 779,
     'x-sp-doc_height': 975,
+    'x-sp-br_features_flash': false,
     'x-sp-dvce_sent_tstamp': '1662594886028',
     'x-sp-self_describing_event_com_snowplowanalytics_snowplow_identify_1': {
       id: 'fooBar',

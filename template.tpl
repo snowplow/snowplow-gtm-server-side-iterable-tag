@@ -546,6 +546,7 @@ ___TEMPLATE_PARAMETERS___
 
 ___SANDBOXED_JS_FOR_SERVER___
 
+const createRegex = require('createRegex');
 const getAllEventData = require('getAllEventData');
 const getContainerVersion = require('getContainerVersion');
 const getEventData = require('getEventData');
@@ -763,17 +764,53 @@ const isSpContextsProp = (prop) => {
   return prop.indexOf('x-sp-contexts_') === 0;
 };
 
-/*
+/**
+ * Removes the major version part from a schema reference if exists.
+ * @example
+ * // returns 'com_acme_test'
+ * mkVersionFree('com_acme_test_1')
+ * @example
+ * // returns 'com_acme_test'
+ * mkVersionFree('com_acme_test')
+ *
+ * @param {string} schemaRef - The schema
+ * @returns {string}
+ */
+const mkVersionFree = (schemaRef) => {
+  const versionRexp = createRegex('_[0-9]+$');
+  return schemaRef.replace(versionRexp, '');
+};
+
+/**
  * Given a list of entity references and an entity name,
  * returns the index of a matching reference.
  * Matching reference means whether the entity name starts with ref.
+ * @example
+ * // returns 0
+ * getReferenceIdx('com_test_test_1', ['com_test_test_1']);
+ * @example
+ * // returns 0
+ * getReferenceIdx('com_test_test_1', ['com_test_test']);
+ * @example
+ * // returns -1
+ * getReferenceIdx('com_test_test_1', ['com_test_test_2']);
+ * @example
+ * // returns -1
+ * getReferenceIdx('com_test_test', ['com_test_test_fail']);
+ * @example
+ * // returns -1
+ * getReferenceIdx('com_test_test_fail', ['com_test_test']);
  *
- * @param entity {string} - the entity name to match
- * @param refsList {Array} - an array of strings
+ * @param {string} entity - The entity name to match
+ * @param {string[]} refsList - An array of references
+ * @returns {integer}
  */
 const getReferenceIdx = (entity, refsList) => {
+  const versionFreeEntity = mkVersionFree(entity);
   for (let i = 0; i < refsList.length; i++) {
-    if (entity.indexOf(refsList[i]) === 0) {
+    const okControl = entity.indexOf(refsList[i]) === 0;
+    const okFree = versionFreeEntity === mkVersionFree(refsList[i]);
+    if (okControl && okFree) {
       return i;
     }
   }
@@ -786,15 +823,10 @@ const getReferenceIdx = (entity, refsList) => {
  * Assumes that a rule contains 'key' and 'version' properties.
  */
 const cleanRules = (rules) => {
+  const lastNumRexp = createRegex('[0-9]$');
   return rules.filter((row) => {
     if (row.version === 'control') {
-      // last char can't be null or empty string so fine for makeNumber
-      const lastCharAsNum = makeNumber(row.key.slice(-1));
-      if (!lastCharAsNum && lastCharAsNum !== 0) {
-        // was not a digit, so invalid rule
-        return false;
-      }
-      return true;
+      return !!row.key.match(lastNumRexp);
     }
     return true;
   });
@@ -809,9 +841,8 @@ const parseEntityExclusionRules = (tagConfig) => {
     const validRules = cleanRules(rules);
     const excludedEntities = validRules.map((row) => {
       const entityRef = parseSchemaToMajorKeyValue(row.key);
-      const versionFreeRef = entityRef.slice(0, -2);
       return {
-        ref: row.version === 'control' ? entityRef : versionFreeRef,
+        ref: row.version === 'control' ? entityRef : mkVersionFree(entityRef),
         version: row.version,
       };
     });
@@ -829,9 +860,8 @@ const parseEntityRules = (tagConfig) => {
     const validRules = cleanRules(rules);
     const parsedRules = validRules.map((row) => {
       const parsedKey = parseSchemaToMajorKeyValue(row.key);
-      const versionFreeKey = parsedKey.slice(0, -2);
       return {
-        ref: row.version === 'control' ? parsedKey : versionFreeKey,
+        ref: row.version === 'control' ? parsedKey : mkVersionFree(parsedKey),
         parsedKey: parsedKey,
         mappedKey: row.mappedKey || cleanPropertyName(parsedKey),
         target: row.propertiesObjectToPopulate,
@@ -2177,6 +2207,12 @@ scenarios:
     assertThat(trackBody).isEqualTo(expectedIterableTrackBody);
 - name: Test entity rules - include none - version control
   code: |
+    const testEvent = jsonApi.parse(jsonApi.stringify(mockEventObjectSelfDesc));
+    testEvent['x-sp-contexts_com_google_tag-manager_server-side_user_data_test_1'] =
+      [{ email_address: 'fail@test.io' }];
+    testEvent['x-sp-contexts_com_youtube_youtube_test_1'] = [
+      { email_address: 'fail@test.io' },
+    ];
     const mockData = {
       apiKey: 'test',
       useClientIdFallback: true,
@@ -2213,7 +2249,6 @@ scenarios:
       logType: 'no',
     };
 
-    const testEvent = mockEventObjectSelfDesc;
     const expectedIterableUpdateBody = {
       email: 'foo@test.io',
       userId: 'tester',
@@ -2329,6 +2364,12 @@ scenarios:
     assertThat(trackBody).isEqualTo(expectedIterableTrackBody);
 - name: Test entity rules - exclude - version control
   code: |
+    const testEvent = jsonApi.parse(jsonApi.stringify(mockEventObjectSelfDesc));
+    testEvent['x-sp-contexts_com_google_tag-manager_server-side_user_data_test_1'] =
+      [{ email_address: 'fail@test.io' }];
+    testEvent['x-sp-contexts_com_youtube_youtube_test_1'] = [
+      { email_address: 'fail@test.io' },
+    ];
     const mockData = {
       apiKey: 'test',
       useClientIdFallback: true,
@@ -2372,6 +2413,14 @@ scenarios:
           key: 'x-sp-contexts_com_snowplowanalytics_snowplow_mobile_context_1',
           version: 'control',
         },
+        {
+          key: 'x-sp-contexts_com_youtube_youtube_test_1',
+          version: 'control',
+        },
+        {
+          key: 'x-sp-contexts_com_google_tag-manager_server-side_user_data_test',
+          version: 'free',
+        },
       ],
       includeCommonEventProperties: true,
       includeCommonUserProperties: true,
@@ -2379,7 +2428,6 @@ scenarios:
       logType: 'no',
     };
 
-    const testEvent = mockEventObjectSelfDesc;
     const expectedIterableUpdateBody = {
       email: 'foo@test.io',
       userId: 'tester',

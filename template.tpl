@@ -585,12 +585,12 @@ const defaultIds = {
 
 // Helpers
 
-/*
+/**
  * Assumes logType argument is string.
  * Determines if logging is enabled.
  *
- * @param logType {string} - the logType set ('no', 'debug', 'always')
- * @returns - whether logging is enabled (boolean)
+ * @param {string} logType - The logType set ('no', 'debug', 'always')
+ * @returns {boolean} Whether logging is enabled
  */
 const determineIsLoggingEnabled = (logType) => {
   const containerVersion = getContainerVersion();
@@ -612,12 +612,13 @@ const determineIsLoggingEnabled = (logType) => {
   return data.logType === 'always';
 };
 
-/*
+/**
  * Creates the log message and logs it to console.
  *
- * @param typeName {string} - the type of log ('Message', 'Request', 'Response')
- * @param stdInfo {Object} - the standard info for all logs (Name, Type, TraceId, EventName)
- * @param logInfo {Object} - an object including information for the specific log type
+ * @param {string} typeName - The type of log ('Message', 'Request', 'Response')
+ * @param {Object} stdInfo - The standard info for all logs (Name, Type, TraceId, EventName)
+ * @param {Object} logInfo - An object including information for the specific log type
+ * @returns {undefined}
  */
 const doLogging = (typeName, stdInfo, logInfo) => {
   const logMessage = {
@@ -650,6 +651,12 @@ const doLogging = (typeName, stdInfo, logInfo) => {
   log(JSON.stringify(logMessage));
 };
 
+/**
+ * Removes equal to null properties from given object.
+ *
+ * @param {Object} obj - The object to clean
+ * @returns {Object}
+ */
 const cleanObject = (obj) => {
   let target = {};
 
@@ -662,6 +669,12 @@ const cleanObject = (obj) => {
   return target;
 };
 
+/**
+ * Merges objects.
+ *
+ * @param {Object[]} args - The array of objects to merge
+ * @returns {Object} The resulting object
+ */
 const merge = (args) => {
   let target = {};
 
@@ -680,6 +693,12 @@ const merge = (args) => {
   return target;
 };
 
+/**
+ * Utility function that creates an object according to Event Property Rules.
+ *
+ * @param {Object[]} configProps - The event property rules
+ * @returns {Object}
+ */
 const getEventDataByKeys = (configProps) => {
   const props = {};
   configProps.forEach((p) => {
@@ -691,6 +710,14 @@ const getEventDataByKeys = (configProps) => {
   return props;
 };
 
+/**
+ * Replaces all occurences of a substring.
+ *
+ * @param {string} str - The string
+ * @param {string} substring - The substring to replace
+ * @param {string} newSubstr - The new substring to replace with
+ * @returns {string}
+ */
 const replaceAll = (str, substr, newSubstr) => {
   let finished = false,
     result = str;
@@ -704,10 +731,22 @@ const replaceAll = (str, substr, newSubstr) => {
   return result;
 };
 
+/**
+ * Returns whether a string is upper case.
+ *
+ * @param {string} value - The string to check
+ * @returns {boolean}
+ */
 const isUpper = (value) => {
   return value === value.toUpperCase() && value !== value.toLowerCase();
 };
 
+/**
+ * Converts a string to snake case.
+ *
+ * @param {string} value - The string to convert
+ * @returns {string} The converted string
+ */
 const toSnakeCase = (value) => {
   let result = '';
   let previousChar;
@@ -723,11 +762,33 @@ const toSnakeCase = (value) => {
   return result;
 };
 
+/**
+ * Cleans a name from the GTM-SS Snowplow prefix ('x-sp-').
+ *
+ * @param {string} prop - The property name
+ * @returns {string} The property name with the GTM-SS Snowplow prefix removed.
+ */
 const cleanPropertyName = (prop) => prop.replace('x-sp-', '');
 
+/**
+ * Given an array and a configuration object,
+ *  returns the element from a single element array or the array itself.
+ *
+ * @param {Array} arr - The input array
+ * @param {Object} tagConfig - The tag configuration object
+ * @param {boolean} tagConfig.extractFromArray - Whether to extract a single element
+ * @returns {*} The array or its single element
+ */
 const extractFromArrayIfSingleElement = (arr, tagConfig) =>
   arr.length === 1 && tagConfig.extractFromArray ? arr[0] : arr;
 
+/**
+ * Parses a Snowplow schema to the expected major version format,
+ *  also prefixed so as to match the contexts' output of the Snowplow Client.
+ *
+ * @param {string} schema - The input schema
+ * @returns {string} The expected output client event property
+ */
 const parseSchemaToMajorKeyValue = (schema) => {
   if (schema.indexOf('x-sp-contexts_') === 0) return schema;
   if (schema.indexOf('contexts_') === 0) return 'x-sp-' + schema;
@@ -750,15 +811,21 @@ const parseSchemaToMajorKeyValue = (schema) => {
   return schema;
 };
 
-/*
+/**
  * Returns whether a property name is a Snowplow self-describing event property.
+ *
+ * @param {string} prop - The property name
+ * @returns {boolean}
  */
 const isSpSelfDescProp = (prop) => {
   return prop.indexOf('x-sp-self_describing_event_') === 0;
 };
 
-/*
+/**
  * Returns whether a property name is a Snowplow context/entity property.
+ *
+ * @param {string} prop - The property name
+ * @returns {boolean}
  */
 const isSpContextsProp = (prop) => {
   return prop.indexOf('x-sp-contexts_') === 0;
@@ -817,10 +884,13 @@ const getReferenceIdx = (entity, refsList) => {
   return -1;
 };
 
-/*
+/**
  * Filters out invalid rules to avoid unintended behavior.
  * (e.g. version control being ignored if version num is not included in name)
  * Assumes that a rule contains 'key' and 'version' properties.
+ *
+ * @param {Object[]} rules - The provided rules
+ * @returns {Object[]} The valid rules
  */
 const cleanRules = (rules) => {
   const lastNumRexp = createRegex('[0-9]$');
@@ -832,8 +902,11 @@ const cleanRules = (rules) => {
   });
 };
 
-/*
+/**
  * Parses the entity exclusion rules from the tag configuration.
+ *
+ * @param {Object} tagConfig - The tag configuration
+ * @returns {Object[]}
  */
 const parseEntityExclusionRules = (tagConfig) => {
   const rules = tagConfig.entityExclusionRules;
@@ -851,8 +924,11 @@ const parseEntityExclusionRules = (tagConfig) => {
   return [];
 };
 
-/*
+/**
  * Parses the entity inclusion rules from the tag configuration.
+ *
+ * @param {Object} tagConfig - The tag configuration
+ * @returns {Object[]}
  */
 const parseEntityRules = (tagConfig) => {
   const rules = tagConfig.entityMappingRules;
@@ -873,9 +949,13 @@ const parseEntityRules = (tagConfig) => {
   return [];
 };
 
-/*
+/**
  * Given the inclusion rules and the excluded entity references,
  * returns the final entity mapping rules.
+ *
+ * @param {Object[]} inclusionRules - The rules about entities to include
+ * @param {string[]} excludedRefs - The entity references to be excluded
+ * @returns {Object[]} The final entity rules
  */
 const finalizeEntityRules = (inclusionRules, excludedRefs) => {
   const finalEntities = inclusionRules.filter((row) => {
@@ -885,12 +965,12 @@ const finalizeEntityRules = (inclusionRules, excludedRefs) => {
   return finalEntities;
 };
 
-/*
- * Modifies the respective objects to populate according to Snowplow Event Context Rules.
+/**
+ * Constructs the respective event and user properties.
  *
- * @param eventData {Object} - the client event object
- * @param tagConfig {Object} - the tag configuration object
- * @returns an Object with eventFields and userFields properties
+ * @param {Object} eventData - The client event object
+ * @param {Object} tagConfig - The tag configuration object
+ * @returns {Object}
  */
 const parseCustomEventsAndEntities = (eventData, tagConfig) => {
   const inclusionRules = parseEntityRules(tagConfig);
@@ -941,8 +1021,13 @@ const parseCustomEventsAndEntities = (eventData, tagConfig) => {
   };
 };
 
-/*
+/**
  * Creates the `dataFields` for the Iterable payload towards /events/track API.
+ *
+ * @param {Object} eventData - The common event object
+ * @param {Object} tagConfig - The tag configuration
+ * @param {Object} eventSpFields - The Snowplow fields to add
+ * @returns {Object}
  */
 const mkEventDataFields = (eventData, tagConfig, eventSpFields) => {
   let eventProperties = {};
@@ -966,8 +1051,13 @@ const mkEventDataFields = (eventData, tagConfig, eventSpFields) => {
   return cleanObject(final);
 };
 
-/*
+/**
  * Creates the `dataFields` for the Iterable payload towards /users/update API.
+ *
+ * @param {Object} eventData - The common event object
+ * @param {Object} tagConfig - The tag configuration
+ * @param {Object} userSpFields - The Snowplow fields to add
+ * @returns {Object}
  */
 const mkUserDataFields = (eventData, tagConfig, userSpFields) => {
   let userProperties = {};
@@ -988,11 +1078,14 @@ const mkUserDataFields = (eventData, tagConfig, userSpFields) => {
   return cleanObject(final);
 };
 
-/*
+/**
  * Helper function to locate a user identifier from a given table (locator).
  * A locator is a table (array of objects) like the `email` and `userId` tables,
  * which are Tag configuration Fields.
  * Each of its rows contains a priority and an event key path to look for.
+ *
+ * @param {Object[]} locator - The locator array
+ * @returns {*}
  */
 const locate = (locator) => {
   const ordLoc = locator.sort((x, y) => {
@@ -1012,8 +1105,12 @@ const locate = (locator) => {
   return undefined;
 };
 
-/*
+/**
  * Determines if an event is an identity event depending on Tag configuration.
+ *
+ * @param {Object} eventData - The common event object
+ * @param {Object} tagConfig - The tag configuration
+ * @returns {boolean}
  */
 const isIdentityEvent = (eventData, tagConfig) => {
   if (tagConfig.useDefaultIdentify) {
@@ -1028,11 +1125,15 @@ const isIdentityEvent = (eventData, tagConfig) => {
   return false;
 };
 
-/*
+/**
  * Creates an identifiers object, which has properties:
  *  - email
  *  - userId
  * See also: iglu:com.snowplowanalytics.snowplow/identify/jsonschema/1-0-0
+ *
+ * @param {Object} eventData - The common event object
+ * @param {Object} tagConfig - The tag configuration
+ * @returns {Object}
  */
 const mkIdentifiers = (eventData, tagConfig) => {
   const idLocations = {
@@ -1047,14 +1148,14 @@ const mkIdentifiers = (eventData, tagConfig) => {
   return cleanObject(userIdentifiers);
 };
 
-/*
+/**
  * Creates the Iterable payload for /events/track API.
  *
- * @param eventData {Object} - the GTM-SS client event object
- * @param tagConfig {Object} - the Tag configuration
- * @param ids {Object} - the identifiers object
- * @param eventSpFields {Object} - the dataFields from Snowplow Event Mapping Options
- * @returns the payload object
+ * @param {Object} eventData - The common event object
+ * @param {Object} tagConfig - The tag configuration
+ * @param {Object} ids - The identifiers object
+ * @param {Object} eventSpFields - The dataFields from Snowplow Event Mapping Options
+ * @returns {Object} The payload object
  */
 const mkIterableEvent = (eventData, tagConfig, ids, eventSpFields) => {
   const eventBody = {
@@ -1072,14 +1173,14 @@ const mkIterableEvent = (eventData, tagConfig, ids, eventSpFields) => {
   return cleanObject(eventBody);
 };
 
-/*
+/**
  * Creates the Iterable payload for /users/update API.
  *
- * @param eventData {Object} - the GTM-SS client event object
- * @param tagConfig {Object} - the Tag configuration
- * @param ids {Object} - the identifiers object
- * @param userSpFields {Object} - the dataFields from Snowplow Event Mapping Options
- * @returns the payload object
+ * @param {Object} eventData - The common event object
+ * @param {Object} tagConfig - The tag configuration
+ * @param {Object} ids - The identifiers object
+ * @param {Object} userSpFields - The dataFields from Snowplow Event Mapping Options
+ * @returns {Object} The payload object
  */
 const mkIterableUserData = (eventData, tagConfig, ids, userSpFields) => {
   const userDataBody = {
@@ -1093,8 +1194,11 @@ const mkIterableUserData = (eventData, tagConfig, ids, userSpFields) => {
   return cleanObject(userDataBody);
 };
 
-/*
+/**
  * Determines if an API response means 'No user exists with userId'.
+ *
+ * @param {string} - The request body
+ * @returns {boolean}
  */
 const isNoUidResponse = (body) => {
   const checkCode = 'BadParams';
@@ -1104,10 +1208,13 @@ const isNoUidResponse = (body) => {
   return respBody.code === checkCode && respBody.msg.indexOf(checkMsg) === 0;
 };
 
-/*
+/**
  * Given an iterable payload:
  *  - creates a placeholder email from userId (assumes userId exists)
  *  - adds it in the payload (side effects)
+ *
+ * @param {Object} iterableData
+ * @returns {Object} The Iterable payload with added placeholder email
  */
 const addPlaceholderEmail = (iterableData) => {
   const placeholderEmail = iterableData.userId + iterablePlaceholderDomain;
@@ -1115,10 +1222,14 @@ const addPlaceholderEmail = (iterableData) => {
   return iterableData;
 };
 
-/*
+/**
  * Tracks an event using userId as user identifier.
  * If it fails because no user exists with that userId,
  * makes placeholder email and tracks the event.
+ *
+ * @param {Object} iterableEvent - The Iterable event to track
+ * @param {Object} opts - The request options
+ * @param {function} logFun - The function to use for logging
  */
 const trackWithUserIdPath = (iterableEvent, opts, logFun) => {
   logFun('Request', {
@@ -1149,8 +1260,12 @@ const trackWithUserIdPath = (iterableEvent, opts, logFun) => {
   );
 };
 
-/*
+/**
  * Tracks an event using email as user identifier.
+ *
+ * @param {Object} iterableEvent - The Iterable event to track
+ * @param {Object} opts - The request options
+ * @param {function} logFun - The function to use for logging
  */
 const trackWithEmailPath = (iterableEvent, opts, logFun) => {
   logFun('Request', {
@@ -1176,8 +1291,13 @@ const trackWithEmailPath = (iterableEvent, opts, logFun) => {
   );
 };
 
-/*
+/**
  * Makes placeholder email from userId and hands over to updateWithEmailPath.
+ *
+ * @param {Object} iterableEvent - The Iterable event to track
+ * @param {Object} iterableUserData - The Iterable user data
+ * @param {Object} httpOptions - The request options
+ * @param {function} logFun - The function to use for logging
  */
 const updateWithUserIdPath = (
   iterableEvent,
@@ -1191,8 +1311,13 @@ const updateWithUserIdPath = (
   return updateWithEmailPath(updatedEvent, updatedUserData, httpOptions);
 };
 
-/*
+/**
  * Updates the user by email and then tracks the event.
+ *
+ * @param {Object} iterableEvent - The Iterable event to track
+ * @param {Object} iterableUserData - The Iterable user data
+ * @param {Object} httpOptions - The request options
+ * @param {function} logFun - The function to use for logging
  */
 const updateWithEmailPath = (
   iterableEvent,
@@ -1223,12 +1348,12 @@ const updateWithEmailPath = (
   );
 };
 
-/*
+/**
  * Creates the HTTP request options for Iterable API.
  *
- * @param tagConfig {Object} - the tag configuration
- * @param redact {boolean} - whether to redact api key
- * @returns - the HTTP options object
+ * @param {Object} tagConfig - The tag configuration
+ * @param {boolean} redact - Whether to redact api key
+ * @returns {Object} The HTTP options object
  */
 const mkRequestOptions = (tagConfig, redact) => {
   const apiKey = redact ? 'redacted' : tagConfig.apiKey;
@@ -1242,14 +1367,15 @@ const mkRequestOptions = (tagConfig, redact) => {
   };
 };
 
-/*
+/**
  * Helper that wraps doLogging and returns a function that closes over the common
  * logging information.
  * If logging is disabled, returns a no-op function.
  *
- * @param enabled {boolean} - whether logging is enabled
- * @param stdInfo {Object} - the standard info for all logs (Name, Type, TraceId, EventName)
- * @param invariantInfo {Object} - contains common information outside of stdInfo
+ * @param {boolean} enabled - Whether logging is enabled
+ * @param {Object} stdInfo - The standard info for all logs (Name, Type, TraceId, EventName)
+ * @param {Object} invariantInfo - Contains common information outside of stdInfo
+ * @returns {function}
  */
 const mkLogger = (enabled, stdInfo, invariantInfo) => {
   if (!enabled) {
